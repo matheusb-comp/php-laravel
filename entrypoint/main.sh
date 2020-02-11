@@ -13,8 +13,8 @@ export DEFAULT_GATEWAY=$(ip route | awk '/default/ { print $3 }')
 . ./export-secrets.sh "SECRET_"
 
 # If 'artisan' is present, setup the Laravel specific configurations
-APP_DIR=${APP_DIR:-"/var/www/html"}
-if [ -e "${APP_DIR}/artisan" ]; then
+APP_ROOT=${APP_ROOT:-"/var/www/html"}
+if [ -e "${APP_ROOT}/artisan" ]; then
   . ./laravel.sh
 fi
 

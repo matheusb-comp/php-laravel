@@ -1,16 +1,16 @@
 version: "3.7"
 
 networks:
-  app:
+  net:
     driver: overlay
-    attachable: false
+    attachable: true
 
 services:
   # HTTPS server that routes PHP calls to app:9000
   nginx:
     image: nginx:alpine
     networks:
-      - app
+      - net
     ports:
       - target: 80
         published: "${NGINX_HTTP_PORT:-80}"
@@ -37,34 +37,33 @@ services:
         source: ./acme
         target: /var/www/acme
       - type: bind
-        source: "${APP_ROOT:-./}"
+        source: "${APP_ROOT:-..}"
         target: /var/www/html
 
   # Key-value data store for caching and pub/sub
   redis:
     image: redis:alpine
     networks:
-      - app
+      - net
 
   # PHP-FPM server that listens on app:9000
   app:
     image: matheusb-comp/php-laravel
     networks:
-      - app
+      - net
     environment:
-      - "DB_CONNECTION=${DB_CONNECTION:-pgsql}"
-      - "DB_PORT=${DB_PORT:-5432}"
-      - "DB_HOST=${DB_HOST}"
-      - "DB_USERNAME=${DB_USERNAME}"
-      - "DB_DATABASE=${DB_DATABASE}"
-      - "DB_PASSWORD=${DB_PASSWORD}"
-      - "DATABASE_URL=${DATABASE_URL}"
-      - "WAIT_DATABASE=true"
+      APP_ROOT:
+      DATABASE_URL:
+      DB_PORT:
+      DB_HOST: "${DB_HOST_DOCKER:-$DB_HOST}"
+      USER_ID: "${USER_ID:-0}"
+      USER_GROUP: "${USER_GROUP:-0}"
+      WAIT_DATABASE: 'true'
     volumes:
       - type: bind
         source: ./supervisor
         target: /etc/supervisor/conf.d
         read_only: true
       - type: bind
-        source: "${APP_ROOT:-./}"
+        source: "${APP_ROOT:-..}"
         target: /var/www/html
