@@ -1,0 +1,121 @@
+#!/bin/sh
+
+SCRIPT_NAME=$(basename "$0")
+usage () {
+  printf "%s\n\n" "Usage: $SCRIPT_NAME [OPTIONS]"
+  printf "%s\n\nOptions:\n" "Create new certificates for one or more domains \
+using the Certbot docker image with the 'standalone' plugin"
+  echo "  -h, --help             Show this message and exit"
+  echo "  -d, --domain           Required: Domain names to apply. For multiple \
+domains you can use multiple -d flags"
+  echo "  -e, --email            Email address to register with Let's Encrypt"
+  echo "  -p, --path             Location containing the Let's Encrypt folder"
+  echo "  -s, --staging          Use the staging server to obtain test \
+(invalid) certificates"
+  echo "  -t, --testing          Execute a test 'dry-run' without saving any \
+certificates to disk"
+  echo "  -f, --fake-cert        Create self-signed certificates that last for \
+30 days"
+  echo "  -n, --non-interactive  Do not ask before overwriting existing data"
+  printf "\n%s\n" "To be able to run this script, Docker must be installed and \
+the well known HTTP port (80) must not be in use."
+  exit 0
+}
+
+# Process received parameters with getopt (available in BusyBox)
+# https://busybox.net/downloads/BusyBox.html#getopt
+O=$(getopt \
+  -l domain: \
+  -l path: \
+  -l email: \
+  -l staging \
+  -l testing \
+  -l fake-cert \
+  -l non-interactive \
+  -l help \
+  -- d:p:e:stfnh "$@" \
+) || exit 1
+eval set -- "$O"
+while true; do
+  case "$1" in
+  -d|--domain) DOMAINS="$DOMAINS $2"; shift 2;;
+  -p|--path) DATA_PATH="$2"; shift 2;;
+  -e|--email) EMAIL="$2"; shift 2;;
+  -s|--staging) STAGING="--staging"; shift;;
+  -t|--testing) TESTING="--dry-run"; shift;;
+  -f|--fake-cert) FAKE_CERT="true"; shift;;
+  -n|--non-interactive) NON_INTERACTIVE="true"; shift;;
+  -h|--help) usage; shift;;
+  --) shift; break;;
+  *) echo "## Error." >&2; exit 1;;
+  esac
+done
+
+# Check if docker is installed
+if [ ! -x "$(command -v docker)" ]; then
+  echo "## Error: Docker is not installed." >&2
+  exit 1
+fi
+
+# Warn about email not being set
+if [ -z "${EMAIL:+unsetornull}" ]; then
+  echo "## Warning: Registering without an email is strongly discouraged."
+  if [ "$NON_INTERACTIVE" != "true" ]; then
+    read -p "## Are you sure? (y/N) " res
+    if [ "$res" != "Y" ] && [ "$res" != "y" ]; then exit; fi
+  fi
+  # Prepare the email argument that will be used by Certbot
+  EMAIL="--register-unsafely-without-email"
+else
+  EMAIL="--email $EMAIL"
+fi
+
+# Apply the default to DATA_PATH
+cd $(dirname "$0")
+CONF_CERTBOT="${DATA_PATH:-$(pwd)}/letsencrypt"
+
+# Check if at least a domain was provided
+if [ -z "${DOMAINS:+unsetornull}" ]; then
+  echo "## Error: Provide one or more domains (using -d or --domain=)." >&2
+  exit 1
+fi
+
+# Use Certbot's openssl to create "fake" (self-signed) certificates, then exit
+if [ "$FAKE_CERT" = "true" ]; then
+  echo "## Creating 'fake' (self-signed) certificates for domains: $DOMAINS"
+  docker run --rm -v "${CONF_CERTBOT}:/etc/letsencrypt" \
+    -e "CERT_PATH=/etc/letsencrypt/live" --entrypoint "/bin/sh" \
+    certbot/certbot -c "for DOMAIN in $DOMAINS; do \
+      mkdir -p \"\${CERT_PATH}/\${DOMAIN}\"
+      openssl req -x509 -nodes -newkey rsa:1024 -days 30 \
+      -subj \"/CN=\${DOMAIN}\" \
+      -out \"\${CERT_PATH}/\${DOMAIN}/fullchain.pem\" \
+      -keyout \"\${CERT_PATH}/\${DOMAIN}/privkey.pem\" \
+    ; done"
+  exit
+fi
+
+# Check if CONF_CERTBOT already exists and confirm before replacing
+if [ -d "$CONF_CERTBOT" ]; then
+  echo "## Warning: Existing data found. Certificates will be overwritten."
+  if [ "$NON_INTERACTIVE" != "true" ]; then
+    read -p "## Are you sure? (y/N) " res
+    if [ "$res" != "Y" ] && [ "$res" != "y" ]; then exit; fi
+  fi
+fi
+
+# Certbot's standalone server needs to be bound to port 80
+nc -z 127.0.0.1 80
+if [ $? -eq 0 ]; then
+  echo "## Error: Port 80 in use." >&2
+  exit 1
+fi
+
+# Sign certificates using the standalone plugin
+echo "## Issuing Let's Encrypt certificates for domains: $DOMAINS"
+for DOMAIN in $DOMAINS; do DOMAIN_ARGS="$DOMAIN_ARGS -d $DOMAIN"; done
+docker run --rm -p "80:80" -v "${CONF_CERTBOT}:/etc/letsencrypt" \
+  --entrypoint "certbot" certbot/certbot certonly --standalone \
+  --preferred-challenges http --rsa-key-size 4096 --agree-tos \
+  --logs-dir "/etc/letsencrypt/logs" \
+  --force-renewal $TESTING $STAGING $EMAIL $DOMAIN_ARGS

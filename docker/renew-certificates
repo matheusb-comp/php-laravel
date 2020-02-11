@@ -1,0 +1,69 @@
+#!/bin/sh
+
+SCRIPT_NAME=$(basename "$0")
+usage () {
+  printf "%s\n\n" "Usage: $SCRIPT_NAME [OPTIONS]"
+  printf "%s\n\nOptions:\n" "Use the Certbot docker image with the 'webroot' \
+plugin to renew all certificates previously obtained that are near expiry"
+  echo "  -h, --help     Show this message and exit"
+  echo "  -p, --path     Location containing the Let's Encrypt and acme folders"
+  echo "  -s, --staging  Use the staging server to obtain test (invalid) \
+certificates"
+  echo "  -t, --testing  Execute a test 'dry-run' without saving any \
+certificates to disk"
+  echo "  -f, --force    Force the certificate renew, regardless of whether it \
+is near expiry"
+  exit 0
+}
+
+# Process received parameters with getopt (available in BusyBox)
+# https://busybox.net/downloads/BusyBox.html#getopt
+O=$(getopt \
+  -l path: \
+  -l force \
+  -l staging \
+  -l testing \
+  -l help \
+  -- p:fsth "$@" \
+) || exit 1
+eval set -- "$O"
+while true; do
+  case "$1" in
+  -p|--path) DATA_PATH="$2"; shift 2;;
+  -f|--force) FORCE="--force-renewal"; shift;;
+  -s|--staging) STAGING="--staging"; shift;;
+  -t|--testing) TESTING="--dry-run"; shift;;
+  -h|--help) usage; shift;;
+  --) shift; break;;
+  *) echo "## Error." >&2; exit 1;;
+  esac
+done
+
+# Check if docker is installed
+if [ ! -x "$(command -v docker)" ]; then
+  echo "## Error: Docker is not installed." >&2
+  exit 1
+fi
+
+# Apply the default to DATA_PATH
+cd $(dirname "$0")
+CONF_CERTBOT="${DATA_PATH:-$(pwd)}/letsencrypt"
+WEBROOT="${DATA_PATH:-$(pwd)}/acme"
+
+# Check if the 'letsencrypt/renewal' folder exists inside DATA_PATH
+if [ ! -d "${CONF_CERTBOT}/renewal" ]; then
+  echo "## Error: Let's Encrypt 'renewal' folder not found." >&2
+  exit 1
+fi
+
+# Create the webroot folder if it doesn't exist
+mkdir -p "$WEBROOT"
+
+# Execute the certbot webroot renewal
+echo "## Renewing Let's Encrypt certificates"
+docker run --rm \
+  -v "${WEBROOT}:/etc/acme-webroot" \
+  -v "${CONF_CERTBOT}:/etc/letsencrypt" \
+  --entrypoint "certbot" certbot/certbot renew --webroot \
+  -w "/etc/acme-webroot" --logs-dir "/etc/letsencrypt/logs" \
+  $TESTING $STAGING $FORCE
